@@ -1,0 +1,223 @@
+---
+title: "Data 606 - Final Project"
+author: "Silverio Vasquez"
+date: "December 13, 2017"
+output:
+  html_document:
+    df_print: paged
+---
+
+### Part 1 - Introduction:      
+
+A calendar spread in a futures contract is when a contract is bought and another sold x-number of months later for the same asset. The contract that is closer to expiration is called the front contract, and the contract that expires out in the future is called the back contract. Depending on the price differential of the asset, in this case WTI futures, knowing if the back contract price will be lower than the front contract, then an investor can buy the front contract and sell the back contract for a positive investment return. The converse is also true (e.g., sell the front and buy the back contract). 
+
+When the back contract price is higher than the front contract price, the spread (differential) is negative and the curve is upward sloping (contango). When the opposite is true, the spread is positive and the curve is downward sloping (backwardation).
+
+Below is an observational study using supply and demand data from the [U.S. Energy Information Administration](http://eia.gov//) (EIA) to see if this data can help forecast if the curve will be upward or downward sloping using a logit regression model.
+
+The main question this analysis attempts to answer is: Are changes in WTI and gasoline inventory predictive of an upward sloping (contango) or downward sloping (backwardation) oil curve 1-month out?
+
+### Part 2 - Data:
+
+
+Data is reported by the [EIA](http://eia.gov//) and available via [Quandl](http://quandl.com/eia/). The data are monthly between Feb 1991 and Oct 2017.
+
+The response variable is the shape of the oil futures curve and is binary: 0 for upward sloping (contango), or +1 for downward sloping (backwardation). 
+
+The explanatory variables are numerical - percent change in oil and oil & gasoline inventory data.
+
+Each case represents a monthly observation of a futures contract and inventory data. There are 321 observations in the given data set.
+
+
+```{r setup, echo=TRUE, results='hide', warning=FALSE, message=FALSE}
+
+library(xts)
+library(Quandl)
+library(tidyverse)
+library(zoo)
+library(xts)
+library(psych)
+library(ggplot2)
+library(reshape2)
+
+
+Quandl.api_key("TWp9zrWTMziHW_hbugiN")
+f1 <- Quandl("EIA/PET_RCLC1_M", type="xts")
+f2 <- Quandl("EIA/PET_RCLC2_M", type="xts")
+f3 <- Quandl("EIA/PET_RCLC3_M", type="xts")
+f4 <- Quandl("EIA/PET_RCLC4_M", type="xts")
+wti_stock <- Quandl("EIA/STEO_COSXPUS_M", type="xts")
+gas_stock <- Quandl("EIA/STEO_MGTSPUS_M", type="xts")
+
+# Calculate monthly, 3-month, 6-month, and annual changes in both oil and gasoline inventory data
+wstkd <- diff(log(wti_stock))
+wstkd3 <- diff(log(wti_stock),lag=3)
+wstkd6 <- diff(log(wti_stock),lag=6)
+wstkd12 <- diff(log(wti_stock),lag=12)
+
+gstkd <- diff(log(gas_stock))
+gstkd3 <- diff(log(gas_stock),lag=3)
+gstkd6 <- diff(log(gas_stock),lag=6)
+gstkd12 <- diff(log(gas_stock),lag=12)
+
+# Lag the independent variables by 1 month since we want to use them as leading indicators
+wstkdL1 <- lag(wstkd,1)
+wstkd3L1 <- lag(wstkd3,1)
+wstkd6L1 <- lag(wstkd6,1)
+wstkd12L1 <- lag(wstkd12,1)
+
+gstkdL1 <- lag(gstkd,1)
+gstkd3L1 <- lag(gstkd3,1)
+gstkd6L1 <- lag(gstkd6,1)
+gstkd12L1 <- lag(gstkd12,1)
+
+# Create calendar spreads and return sign. Negative means curve is in contango, and positive means curve is in backwardation. Since all the variables are of XTS data type, the dates are automatically taken into account.
+
+f1_2 <- sign(f1-f2)
+f1_3 <- sign(f1-f3)
+f1_4 <- sign(f1-f4)
+f2_3 <- sign(f2-f3)
+f2_4 <- sign(f2-f4)
+f3_4 <- sign(f3-f4)
+
+
+# Combine all the data:
+df <- na.omit(cbind(f1_2,f1_3,f1_4,f2_3,f2_4,f3_4,wstkdL1,wstkd3L1,wstkd6L1,wstkd12L1,gstkdL1,gstkd3L1,gstkd6L1,gstkd12L1))
+
+colnames(df) <- c('f1_2','f1_3','f1_4','f2_3','f2_4','f3_4','wstkdL1','wstkd3L1','wstkd6L1','wstkd12L1','gstkdL1','gstkd3L1','gstkd6L1','gstkd12L1')
+
+```
+
+### Part 3 - Exploratory data analysis:
+
+Before jumping into regression analysis, it'll be interesting to see if there are any meaningful correlations between our depedent and independent variables. The `corr.test` function from the `psych` package shows significant correlations.
+
+There are very little times when the spread variables equal 0, so they are all dropped. All -1s are then converted to 0 for the purpose of using a logit model.
+
+```{r eda}
+describe(df[,1:6])
+describe(df[,7:14]*100)
+
+print("# of Observations in Contango and Backwardation")
+table(df$f1_2)
+print("% of Observations in Contango and Backwardation")
+prop.table(table(df$f1_2)) * 100
+
+
+print("# of Observations in Contango and Backwardation")
+table(df$f1_3)
+print("% of Observations in Contango and Backwardation")
+prop.table(table(df$f1_3)) * 100
+
+
+print("# of Observations in Contango and Backwardation")
+table(df$f1_4)
+print("% of Observations in Contango and Backwardation")
+prop.table(table(df$f1_4)) * 100
+
+
+print("# of Observations in Contango and Backwardation")
+table(df$f2_3)
+print("% of Observations in Contango and Backwardation")
+prop.table(table(df$f2_3)) * 100
+
+
+print("# of Observations in Contango and Backwardation")
+table(df$f2_4)
+print("% of Observations in Contango and Backwardation")
+prop.table(table(df$f2_4)) * 100
+
+
+boxplot(coredata(df[,7:14]*100),col=c('powderblue'),main="Boxplots of the Explanatory Variables",ylab="%",las=2)
+
+# Check correlations
+corr.test(df)
+
+# Plot correlation matrix as a heatmap
+cor_df <- cor(df)
+melt_cor <- melt(cor_df)
+# ggplot(data=melt_cor, aes(x=Var1,y=Var2,fill=value)) + geom_raster()
+
+# NA the bottom half of matrix -- redundant
+cor_top <- cor_df
+cor_top[upper.tri(cor_top)] <- NA
+
+# Create new heatmap
+# Source: http://www.sthda.com/english/wiki/ggplot2-quick-correlation-matrix-heatmap-r-software-and-data-visualization#create-the-correlation-heatmap-with-ggplot2
+
+melt_cor_top <- melt(cor_top, na.rm = TRUE)
+p <- ggplot(data=melt_cor_top,aes(x=Var1,y=Var2,fill=value)) + geom_raster() + scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0, limit = c(-1,1), space = "Lab", 
+   name="Pearson\nCorrelation") +  theme_minimal() + 
+        theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1)) +
+ coord_fixed()
+p +     theme(
+          axis.title.x = element_blank(),
+          axis.title.y = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(),
+          axis.ticks = element_blank(),
+          legend.justification = c(1, 0),
+          legend.position = c(0.6, 0.7),
+          legend.direction = "horizontal")+
+          guides(fill = guide_colorbar(barwidth = 7, barheight = 1,
+                        title.position = "top", title.hjust = 0.5))
+
+
+# Plot some Histograms of indepdent variables
+hist(na.omit(gstkd), main="Monthly Log Difference of Gasoline Inventory",xlab="")
+hist(na.omit(wstkd), main="Monthly Log Difference of Oil Inventory",xlab = "")
+
+# Remove any row where dependent is 0 (less than 10 instances)
+df2 <- subset(df,!(f1_2 == 0 | f1_3 == 0 | f1_4 == 0 | f2_3 == 0 | f2_4 == 0 | f3_4 == 0))
+# Convert -1s to 0s
+df2[,1:6] <- apply(df2[,1:6],2,function(x) ifelse(x==-1,0,1))
+
+
+```
+
+
+### Part 4 - Inference:
+
+```{r logit}
+f1_2m <- glm(f1_2~gstkd3L1+gstkd6L1+gstkd12L1+wstkd3L1+wstkd6L1+wstkd12L1,data=df2,
+             family=binomial(link='logit'))
+f1_3m <- glm(f1_3~gstkd3L1+gstkd6L1+gstkd12L1+wstkd3L1+wstkd6L1+wstkd12L1,data=df2,
+             family=binomial(link='logit'))
+f1_4m <- glm(f1_4~gstkd3L1+gstkd6L1+gstkd12L1+wstkd3L1+wstkd6L1+wstkd12L1,data=df2,
+             family=binomial(link='logit'))
+f2_3m <- glm(f2_3~gstkd3L1+gstkd6L1+gstkd12L1+wstkd3L1+wstkd6L1+wstkd12L1,data=df2,
+             family=binomial(link='logit'))
+f2_4m <- glm(f2_4~gstkd3L1+gstkd6L1+gstkd12L1+wstkd3L1+wstkd6L1+wstkd12L1,data=df2,
+             family=binomial(link='logit'))
+f3_4m <- glm(f3_4~gstkd3L1+gstkd6L1+gstkd12L1+wstkd3L1+wstkd6L1+wstkd12L1,data=df2,
+             family=binomial(link='logit'))
+
+# Print model summaries
+summary(f1_2m)
+summary(f1_3m)
+summary(f1_4m)
+summary(f2_3m)
+summary(f2_4m)
+summary(f3_4m)
+
+```
+
+
+### Part 5 - Conclusion:
+
+Judging from the various regressions above, it appears as though some factors should be strongly considered by investment professionals in this strategy. 
+
+For example, when forecasting the spread 1-month out, the year-over-year change in both oil and gas stock are significant. The negative coefficient implies that if inventories decrease, then the odds of the front contract being higher than the back contract is more likely, ceteris paribus.  
+
+This conclusion is actually the same for all models!
+
+### References:
+
+Diez, David M.; Barr, Chistopher D.; and Cetinkaya-Rundel, Mine - [OpenIntro Statistics 3rd edition](https://www.openintro.org/stat/textbook.php?stat_book=os)
+
+[U.S. Energy Information Administration](https://www.eia.gov/)
+
+[Investopedia](https://www.investopedia.com/articles/optioninvestor/calendar-spread-grain-market.asp)
+
+Chantziara, Thalia and Skiadopoulos, George - [Can the Dynamics of the Term Structure of Petroleum Futures be forecasted? Evidence from Major Markets](https://warwick.ac.uk/fac/soc/wbs/subjects/finance/research/wpaperseries/wf05-243.pdf)
