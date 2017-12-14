@@ -1,2 +1,2 @@
-# Data606-Project #2
+# Data606 - Final Project
 Forecast oil curve using logit regression
